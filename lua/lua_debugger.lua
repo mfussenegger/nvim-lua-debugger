@@ -93,47 +93,92 @@ local function create_read_loop(server, client, handle_request)
 end
 
 
-function handlers.initialize(payload)
-  session = {}
-  session.linesStartAt1 = payload.linesStartAt1 or 1
-  session.columnsStartAt1 = payload.columnsStartAt1 or 1
-  session.supportsRunInTerminalRequest = payload.supportsRunInTerminalRequest or false
+local function mk_event(event)
+  local result = {
+    type = 'event';
+    event = event;
+    seq = session.seq or 1;
+  }
+  session.seq = result.seq + 1
+  return result
+end
+
+local function mk_response(request, response)
+  local result = {
+    type = 'response';
+    seq = session.req or 1;
+    request_seq = request.seq;
+    command = request.command;
+    success = true;
+  }
+  session.seq = result.seq + 1
+  return vim.tbl_extend('error', result, response)
+end
+
+
+function handlers.initialize(client, request)
+  local payload = request.arguments
+  session = {
+    seq = request.seq;
+    client = client;
+    linesStartAt1 = payload.linesStartAt1 or 1;
+    columnsStartAt1 = payload.columnsStartAt1 or 1;
+    supportsRunInTerminalRequest = payload.supportsRunInTerminalRequest or false;
+    breakpoints = {}
+  }
   assert(
     not payload.pathFormat or payload.pathFormat == 'path',
     "Only 'path' pathFormat is supported, got: " .. payload.pathFormat
   )
-  return {
+  client:write(msg_with_content_length(json_encode(mk_response(
+    request, {
+      body = {
+      };
+    }
+  ))))
+  client:write(msg_with_content_length(json_encode(mk_event('initialized'))))
+end
+
+
+function handlers.setBreakpoints(client, request)
+  local payload = request.arguments
+  local bps = {}
+  local result_bps = {}
+  local result = {
     body = {
+      breakpoints = result_bps;
     };
   };
+  session.breakpoints[payload.source.path] = bps
+  for _, bp in ipairs(payload.breakpoints or {}) do
+    bps[bp.line] = bp
+    table.insert(result_bps, {
+      verified = true;
+    })
+  end
+  client:write(msg_with_content_length(json_encode(mk_response(
+    request, result
+  ))))
 end
 
 
 function handlers.attach()
-  return {}
+  debug.sethook(function(event, line)
+    if event == "line" then
+      local info = debug.getinfo(2, "S")
+      -- print(vim.inspect(info))
+    end
+  end, "clr")
 end
 
 
 local function handle_request(client, request_str)
   local request = json_decode(request_str)
-  print(vim.inspect(request))
+  --print(vim.inspect(request))
   assert(request.type == 'request', 'request must have type `request` not ' .. vim.inspect(request))
   local handler = handlers[request.command]
   assert(handler, 'Missing handler for ' .. request.command)
-  local response = handler( request.arguments)
-  local response_skeleton = {
-    type = 'response';
-    request_seq = request.seq;
-    seq = request.seq + 1;
-    success = true;
-    command = request.command;
-  }
-  if response then
-    local final_resp = vim.tbl_extend('error', response_skeleton, response)
-    print(vim.inspect(final_resp))
-    local msg = msg_with_content_length(json_encode(final_resp))
-    client:write(msg)
-  end
+  handler(client, request)
 end
 
 
