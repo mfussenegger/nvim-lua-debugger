@@ -76,6 +76,7 @@ local function create_read_loop(server, client, handle_request)
       -- EOF
       client:close()
       server:close()
+      debug.sethook()
       return
     end
     while true do
@@ -103,6 +104,7 @@ local function mk_event(event)
   return result
 end
 
+
 local function mk_response(request, response)
   local result = {
     type = 'response';
@@ -116,6 +118,14 @@ local function mk_response(request, response)
 end
 
 
+local function debugger_loop()
+  while true do
+    local ev = coroutine.yield()
+    print(env)
+  end
+end
+
+
 function handlers.initialize(client, request)
   local payload = request.arguments
   session = {
@@ -124,7 +134,8 @@ function handlers.initialize(client, request)
     linesStartAt1 = payload.linesStartAt1 or 1;
     columnsStartAt1 = payload.columnsStartAt1 or 1;
     supportsRunInTerminalRequest = payload.supportsRunInTerminalRequest or false;
-    breakpoints = {}
+    breakpoints = {};
+    coro_debugger = coroutine.create(debugger_loop)
   }
   assert(
     not payload.pathFormat or payload.pathFormat == 'path',
@@ -142,20 +153,29 @@ end
 
 function handlers.setBreakpoints(client, request)
   local payload = request.arguments
-  local bps = {}
   local result_bps = {}
   local result = {
     body = {
       breakpoints = result_bps;
     };
   };
-  session.breakpoints[payload.source.path] = bps
+
+  local bps = {}
+  session.breakpoints = bps
+
   for _, bp in ipairs(payload.breakpoints or {}) do
-    bps[bp.line] = bp
+    local line_bps = bps[bp.line]
+    if not line_bps then
+      line_bps = {}
+      bps[bp.line] = line_bps
+    end
+    local full_path = vim.fn.fnamemodify(payload.source.path, ':p')
+    line_bps[full_path] = true
     table.insert(result_bps, {
       verified = true;
     })
   end
+  print('set breakpoints', vim.inspect(session.breakpoints))
   client:write(msg_with_content_length(json_encode(mk_response(
     request, result
   ))))
@@ -165,10 +185,59 @@ end
 function handlers.attach()
   debug.sethook(function(event, line)
     if event == "line" then
+      local bp = session.breakpoints[line]
+      if not bp then
+        return
+      end
       local info = debug.getinfo(2, "S")
-      -- print(vim.inspect(info))
+      local source_path = info.source
+      if source_path:sub(1, 1) == '@' then
+        local path = source_path:sub(2)
+        if bp[path] then
+          print(vim.inspect(info))
+
+          local event_msg = mk_event('stopped')
+          event_msg.body = {
+            reason = 'breakpoint';
+            threadId = 1;
+          }
+          session.client:write(msg_with_content_length(json_encode(event_msg)))
+          vim.schedule_wrap(coroutine.yield)
+          print('resumed')
+        end
+      end
+      -- if info.short_src ~= "vim.lua" then
+      --     coroutine.resume(session.coro_debugger, 'breakpoint')
+      -- end
     end
   end, "clr")
+end
+
+
+function handlers.threads(client, request)
+  client:write(msg_with_content_length(json_encode(mk_response(
+    request, {
+      body = {
+        threads = {
+          {
+            id = 1;
+            name = 'main';
+          },
+        };
+      };
+    }
+  ))))
+end
+
+
+function handlers.stackTrace(client, request)
+  client:write(msg_with_content_length(json_encode(mk_response(
+    request, {
+      body = {
+        stackFrames = {}
+      };
+    }
+  ))))
 end
 
 
@@ -203,6 +272,11 @@ function M.launch()
     host = host;
     port = server:getsockname().port
   }
+end
+
+function M.foo()
+  print('a')
+  print('b')
 end
 
 return M
