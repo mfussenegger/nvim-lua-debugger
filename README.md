@@ -1,4 +1,11 @@
+# UNMAINTAINED
+
+This was a prototype that never made it into a workable state.
+There is now [lua-debug.nvim](https://github.com/jbyuki/lua-debug.nvim) which can be used instead.
+
+
 # Neovim Lua Debug Adapter
+
 
 `nvim-lua-debugger` is a Debug Adapter that allows debugging lua plugins written for Neovim.
 It is the server component in the [Debug Adapter Protocol][1].
